@@ -1,0 +1,8 @@
+node_modules/
+dist/
+server/dist/
+webapp/dist/
+*.tar.gz
+.DS_Store
+.env
+*.exe
