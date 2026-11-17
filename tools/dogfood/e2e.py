@@ -287,6 +287,7 @@ async def flow(b):
         dlg = dpg.locator("#interactiveDialogModal, [role=dialog]:has-text('New stakeholder pack')").first
         try:
             await dlg.wait_for(timeout=15000)
+            await dpg.wait_for_timeout(1200)  # let the modal fade-in finish before the proof shot
             await dpg.screenshot(path="/out/e2e-6-ssq-new-dialog.png")
             await dlg.locator("input#title, input[id$='title']").first.fill("Human-made pack")
             await dlg.locator("input#respondents, input[id$='respondents']").first.fill("@scott")
