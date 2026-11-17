@@ -25,9 +25,9 @@ export default function PackCard({post}: Props) {
             data-testid='ssq-card'
             data-pack-id={p.ssq_pack_id}
             style={{
-                borderLeft: `4px solid ${STATUS_BAR[status] || STATUS_BAR.open}`,
+                // shorthand first, then the left edge; the other order wipes the status color
                 border: '1px solid rgba(var(--center-channel-color-rgb), 0.16)',
-                borderLeftWidth: 4,
+                borderLeft: `4px solid ${STATUS_BAR[status] || STATUS_BAR.open}`,
                 borderRadius: 4,
                 padding: '10px 14px',
                 margin: '4px 0',
