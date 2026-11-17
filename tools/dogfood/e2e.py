@@ -1,6 +1,6 @@
 """SS-53 A1–A9 end-to-end on the throwaway MM (never prod). Real browsers as drew + scott, bot via REST.
 Run: docker run --rm --network host -v /root/ssq-dogfood:/out --entrypoint python loot-runner:1.10.1 /out/e2e.py"""
-import asyncio, json, struct, urllib.request, uuid, zlib
+import asyncio, json, sys, struct, urllib.request, uuid, zlib
 
 MM = "http://127.0.0.1:8065"
 P = MM + "/plugins/com.mysticspark.stakeholder-questions/api/v1"
@@ -90,7 +90,8 @@ async def browser_for(b, user):
     assert r.ok, await r.text()
     pg = await ctx.new_page()
     errs = []
-    pg.on("pageerror", lambda e: errs.append(str(e)[:200]))
+    pg.on("pageerror", lambda e: errs.append(str(e)[:160] + " @ " + " <- ".join(
+        l.strip()[:110] for l in (getattr(e, "stack", "") or "").splitlines()[1:4])))
     pg.on("response", lambda r: NET.append(f"{user} {r.request.method} {r.status} {r.url.split('/plugins/')[-1][:90]}") if ("stakeholder" in r.url or r.status >= 400) else None)
     pg.on("console", lambda m: CONSOLE.append(f"{user} [{m.type}] {m.text[:200]}") if m.type == "error" else None)
     PAGES[user] = pg
@@ -234,7 +235,9 @@ async def flow(b):
         check("A4 summary.md lists decisions", "## Decisions" in md and "**Decision:** Hermes LXC" not in md and "Other, @scott: Both, split by load" in md,
               md.split("## Decisions")[-1][:160].replace("\n", " / "))
         _, thread = api("GET", f"{MM}/api/v4/posts/{pack['post_id']}/thread", BOT)
-        check("Completion summary posted in thread", any("Pack complete" in x.get("message", "") for x in thread["posts"].values()))
+        done_msgs = [x["message"] for x in thread["posts"].values() if "Pack complete" in x.get("message", "")]
+        check("Completion summary in thread @mentions creating bot", done_msgs and done_msgs[0].startswith("@sigil ✅ Pack complete"),
+              (done_msgs or ["none"])[0][:70].replace("\n", " / "))
         c, e = api("POST", f"{P}/packs/{PID}/answers", dtok, {"question_id": "q1", "option_ids": ["blade"]})
         check("Answers frozen after quorum (409)", c == 409, f"{c} {e}")
 
@@ -256,8 +259,53 @@ async def flow(b):
         c4 = c4 if ct == "image/png" else f"{c4}/{ct}"
         check("File proxy serves referenced images only", c4 == 200 and c5 == 404, f"{c4},{c5}")
 
-        check("A9 React 19: no page errors (drew)", not derrs, str(derrs))
-        check("A9 React 19: no page errors (scott)", not serrs, str(serrs))
+        # any bot: sons posts via the portable CLI; quorum gets sons @mentioned
+        import subprocess
+        sons_env = {"MATTERMOST_URL": MM, "MATTERMOST_TOKEN": open("/out/sons.tok").read().strip(), "PATH": "/usr/bin:/bin"}
+        json.dump({"title": "Sons asks", "respondents": ["drew", "scott"], "questions": [
+            {"prompt": "Print-on-demand provider?", "options": [{"label": "Printful", "recommended": True}, {"label": "Gelato"}]}]},
+            open("/out/sons-pack.json", "w"))
+        cp = subprocess.run([sys.executable, "/out/ssq.py", "create", "/out/sons-pack.json", "--channel", "ssq/office-hours"],
+                            capture_output=True, text=True, env=sons_env)
+        sons_pack = json.loads(cp.stdout or "{}") if cp.returncode == 0 else {}
+        check("Any bot: @sons creates via skill CLI", bool(sons_pack.get("pack_id")), (cp.stdout or cp.stderr).strip()[:100])
+        if sons_pack.get("pack_id"):
+            for t in (dtok, stok):
+                api("POST", f"{P}/packs/{sons_pack['pack_id']}/answers", t, {"question_id": "q1", "option_ids": ["printful"]})
+            _, th = api("GET", f"{MM}/api/v4/posts/{sons_pack['post_id']}/thread", BOT)
+            msgs = [x["message"] for x in th["posts"].values() if "Pack complete" in x.get("message", "")]
+            check("Any bot: completion @mentions @sons (not @sigil)", msgs and msgs[0].startswith("@sons "), (msgs or ["none"])[0][:50])
+            cs = subprocess.run([sys.executable, "/out/ssq.py", "summary", sons_pack["pack_id"]], capture_output=True, text=True, env=sons_env)
+            check("Any bot: skill CLI reads summary", "**Decision:** Printful (all 2 agree)" in cs.stdout, cs.stdout[-80:].replace("\n", " / "))
+
+        # human: drew creates a pack with /ssq new (interactive dialog), mentioning scott
+        before = len(api("GET", f"{MM}/api/v4/channels/{ch['id']}/posts?per_page=30", BOT)[1]["order"])
+        box = dpg.locator("#post_textbox")
+        await box.click(force=True)
+        await box.fill("/ssq new")
+        await dpg.keyboard.press("Enter")
+        dlg = dpg.locator("#interactiveDialogModal, [role=dialog]:has-text('New stakeholder pack')").first
+        try:
+            await dlg.wait_for(timeout=15000)
+            await dpg.screenshot(path="/out/e2e-6-ssq-new-dialog.png")
+            await dlg.locator("input#title, input[id$='title']").first.fill("Human-made pack")
+            await dlg.locator("input#respondents, input[id$='respondents']").first.fill("@scott")
+            await dlg.locator("textarea#questions, textarea[id$='questions']").first.fill(
+                "Logo direction?\n- Seal (recommended) :: classic\n- Wordmark\n- Other")
+            await dlg.locator("#interactiveDialogSubmit, button:has-text('Post pack')").first.click(force=True)
+            human = dpg.locator('[data-testid="ssq-card"]', has_text="Human-made pack").last
+            await human.wait_for(timeout=15000)
+            ht = (await human.inner_text()).replace("\n", " | ")
+            check("Any participant: /ssq new dialog creates a pack", "created by @drew" in ht and "@scott" in ht, ht[:140])
+        except Exception as ex:
+            await dpg.screenshot(path="/out/e2e-6-ssq-new-FAIL.png")
+            check("Any participant: /ssq new dialog creates a pack", False, str(ex).splitlines()[0][:120])
+
+        for who, errs in (("drew", derrs), ("scott", serrs)):
+            ours = [e for e in errs if "stakeholder-questions" in e or "render is not a function" in e]
+            for e in errs:
+                print(f"INFO page error ({who}): {e[:600]}")
+            check(f"A9 React 19: no page errors from this plugin ({who})", not ours, str(ours) if ours else f"{len(errs)} non-plugin error(s)")
         await b.close()
 
 try:

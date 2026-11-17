@@ -43,8 +43,27 @@ except urllib.error.HTTPError:
 print(call("POST", f"/users/{bid}/tokens", tok, {"description": "ssq-dogfood"})[1]["token"])
 PY
 mv bot.tok.new bot.tok; fi
+# second bot (sons) to prove any bot can use it
+if [ ! -s sons.tok ]; then ADMINPW="$(pw admin)" python3 - <<'PY' > sons.tok.new
+import json, os, urllib.request
+MM = "http://127.0.0.1:8065/api/v4"
+def call(method, path, tok=None, body=None):
+    req = urllib.request.Request(MM + path, method=method, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Content-Type": "application/json", **({"Authorization": "Bearer " + tok} if tok else {})})
+    with urllib.request.urlopen(req) as r:
+        return r.headers, json.loads(r.read() or b"{}")
+h, _ = call("POST", "/users/login", body={"login_id": "admin", "password": os.environ["ADMINPW"]})
+tok = h["Token"]
+try:
+    bid = call("POST", "/bots", tok, {"username": "sons", "display_name": "Sons"})[1]["user_id"]
+except urllib.error.HTTPError:
+    bid = call("GET", "/users/username/sons", tok)[1]["id"]
+print(call("POST", f"/users/{bid}/tokens", tok, {"description": "ssq-dogfood"})[1]["token"])
+PY
+mv sons.tok.new sons.tok; fi
 m team users add ssq sigil >/dev/null 2>&1 || true
-m channel users add ssq:office-hours drew scott sigil >/dev/null 2>&1 || true
+m team users add ssq sons >/dev/null 2>&1 || true
+m channel users add ssq:office-hours drew scott sigil sons >/dev/null 2>&1 || true
 # A8: seed another plugin's settings, install, and prove they survive (Jitsi wipe incident)
 printf '{"PluginSettings":{"Plugins":{"jitsi":{"jitsiurl":"https://meet.example.test","jitsinamingscheme":"mattermost"}}}}' > a8.json
 docker cp a8.json ssq-mm:/tmp/a8.json; m config patch /tmp/a8.json >/dev/null

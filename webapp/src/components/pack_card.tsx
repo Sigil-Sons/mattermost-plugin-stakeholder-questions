@@ -93,7 +93,10 @@ export default function PackCard({post}: Props) {
                     onClick={() => openView({kind: 'results', packId: p.ssq_pack_id})}
                 >{'View results'}</button>
             </div>
-            <div style={{...muted, fontSize: 12, marginTop: 6}}>{'Status: '}<span data-testid='ssq-status'>{label}</span>{' · '}{created}</div>
+            <div style={{...muted, fontSize: 12, marginTop: 6}}>
+                {'Status: '}<span data-testid='ssq-status'>{label}</span>
+                {p.ssq_author ? ' · created by @' + p.ssq_author : ''}{' · '}{created}
+            </div>
         </div>
     );
 }

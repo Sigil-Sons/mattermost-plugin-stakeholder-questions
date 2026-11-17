@@ -71,7 +71,7 @@ func (p *Plugin) sweep(now int64) {
 			changed = true
 			p.clearPending(pk)
 			p.updateCard(pk)
-			p.postInThread(pk, "⌛ **Pack expired: "+pk.Title+"**\n\n"+truncate(summaryMarkdown(pk), 12000))
+			p.postClose(pk, "⌛ Pack expired:")
 		}
 		for _, u := range nudge {
 			if p.botID == "" {

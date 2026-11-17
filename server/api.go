@@ -35,6 +35,8 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		p.handleCreate(w, r, userID)
 	case path == "/api/v1/me/pending" && r.Method == http.MethodGet:
 		p.handlePending(w, r, userID)
+	case path == "/api/v1/dialog/create" && r.Method == http.MethodPost:
+		p.handleDialogCreate(w, r, userID)
 	case len(parts) == 2 && parts[0] == "packs" && r.Method == http.MethodGet:
 		p.handleGet(w, r, userID, parts[1])
 	case len(parts) == 3 && parts[0] == "packs" && parts[2] == "answers" && r.Method == http.MethodPost:
@@ -67,52 +69,63 @@ func (p *Plugin) resolveUser(ref string) (*model.User, error) {
 	return u, nil
 }
 
+type createErr struct {
+	code int
+	msg  string
+}
+
+func (e *createErr) Error() string { return e.msg }
+
+func cerr(code int, msg string) *createErr { return &createErr{code, msg} }
+
 func (p *Plugin) handleCreate(w http.ResponseWriter, r *http.Request, userID string) {
 	var req CreateRequest
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad json: "+err.Error())
 		return
 	}
+	pk, cErr := p.createPack(userID, req)
+	if cErr != nil {
+		writeErr(w, cErr.code, cErr.msg)
+		return
+	}
+	writeJSON(w, http.StatusCreated, pk)
+}
+
+// createPack validates, stores and posts a pack. Shared by the bot API and the /ssq new dialog.
+func (p *Plugin) createPack(userID string, req CreateRequest) (*Pack, *createErr) {
 	req.Title = strings.TrimSpace(req.Title)
 	if req.Title == "" || req.ChannelID == "" {
-		writeErr(w, http.StatusBadRequest, "title and channel_id are required")
-		return
+		return nil, cerr(http.StatusBadRequest, "title and channel_id are required")
 	}
 	cfg := p.config()
 	ch, appErr := p.API.GetChannel(req.ChannelID)
 	if appErr != nil {
-		writeErr(w, http.StatusNotFound, "channel not found")
-		return
+		return nil, cerr(http.StatusNotFound, "channel not found")
 	}
 	if !cfg.teamAllowed(ch.TeamId) {
-		writeErr(w, http.StatusForbidden, "packs are not enabled for this team")
-		return
+		return nil, cerr(http.StatusForbidden, "packs are not enabled for this team")
 	}
 	if !p.API.HasPermissionToChannel(userID, ch.Id, model.PermissionCreatePost) {
-		writeErr(w, http.StatusForbidden, "no permission to post in this channel")
-		return
+		return nil, cerr(http.StatusForbidden, "no permission to post in this channel")
 	}
 	if err := normalizeQuestions(req.Questions, cfg.maxQuestions()); err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
-		return
+		return nil, cerr(http.StatusBadRequest, err.Error())
 	}
 	if len(req.Respondents) == 0 {
-		writeErr(w, http.StatusBadRequest, "at least one respondent is required")
-		return
+		return nil, cerr(http.StatusBadRequest, "at least one respondent is required")
 	}
 	var ids, names []string
 	for _, ref := range req.Respondents {
 		u, err := p.resolveUser(ref)
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, err.Error())
-			return
+			return nil, cerr(http.StatusBadRequest, err.Error())
 		}
 		if contains(ids, u.Id) {
 			continue
 		}
 		if _, appErr := p.API.GetChannelMember(ch.Id, u.Id); appErr != nil {
-			writeErr(w, http.StatusBadRequest, fmt.Sprintf("@%s is not a member of this channel", u.Username))
-			return
+			return nil, cerr(http.StatusBadRequest, fmt.Sprintf("@%s is not a member of this channel", u.Username))
 		}
 		ids = append(ids, u.Id)
 		names = append(names, u.Username)
@@ -125,8 +138,7 @@ func (p *Plugin) handleCreate(w http.ResponseWriter, r *http.Request, userID str
 			}
 		}
 		if err := p.checkOwnFiles(fids, userID); err != nil {
-			writeErr(w, http.StatusBadRequest, "question "+q.ID+": "+err.Error())
-			return
+			return nil, cerr(http.StatusBadRequest, "question "+q.ID+": "+err.Error())
 		}
 	}
 	imp := strings.ToLower(strings.TrimSpace(req.Importance))
@@ -134,13 +146,11 @@ func (p *Plugin) handleCreate(w http.ResponseWriter, r *http.Request, userID str
 		imp = "normal"
 	}
 	if imp != "low" && imp != "normal" && imp != "high" {
-		writeErr(w, http.StatusBadRequest, "importance must be low, normal or high")
-		return
+		return nil, cerr(http.StatusBadRequest, "importance must be low, normal or high")
 	}
 	author, appErr := p.API.GetUser(userID)
 	if appErr != nil {
-		writeErr(w, http.StatusInternalServerError, "author lookup failed")
-		return
+		return nil, cerr(http.StatusInternalServerError, "author lookup failed")
 	}
 	now := model.GetMillis()
 	closes := req.ClosesAt
@@ -151,7 +161,7 @@ func (p *Plugin) handleCreate(w http.ResponseWriter, r *http.Request, userID str
 	pk := &Pack{
 		ID: "pack_" + model.NewId(), TeamID: ch.TeamId, ChannelID: ch.Id,
 		Title: req.Title, Summary: strings.TrimSpace(req.Summary),
-		AuthorUserID: userID, AuthorBot: author.IsBot,
+		AuthorUserID: userID, AuthorBot: author.IsBot, AuthorUsername: author.Username,
 		RespondentUserIDs: ids, MinRespondents: defaultMinRespondents(req.MinRespondents, len(ids), imp),
 		Importance: imp, Visibility: VisibilityOthersOptIn,
 		AllowSkip: req.AllowSkip, AllowReviseUntilLock: true,
@@ -163,30 +173,24 @@ func (p *Plugin) handleCreate(w http.ResponseWriter, r *http.Request, userID str
 	p.kvLock.Lock()
 	defer p.kvLock.Unlock()
 	if err := p.savePack(pk); err != nil {
-		writeErr(w, http.StatusInternalServerError, "store failed")
-		return
+		return nil, cerr(http.StatusInternalServerError, "store failed")
 	}
-	post := &model.Post{
-		UserId: userID, ChannelId: ch.Id, Type: PostType,
-		Message: fallbackMessage(pk, names),
-	}
+	post := &model.Post{UserId: userID, ChannelId: ch.Id, Type: PostType, Message: fallbackMessage(pk, names)}
 	post.SetProps(cardProps(pk))
 	created, appErr := p.API.CreatePost(post)
 	if appErr != nil {
 		_ = p.API.KVDelete(packKey(pk.ID))
-		writeErr(w, http.StatusInternalServerError, "create post failed: "+appErr.Error())
-		return
+		return nil, cerr(http.StatusInternalServerError, "create post failed: "+appErr.Error())
 	}
 	pk.PostID = created.Id
 	if err := p.savePack(pk); err != nil {
-		writeErr(w, http.StatusInternalServerError, "store failed")
-		return
+		return nil, cerr(http.StatusInternalServerError, "store failed")
 	}
 	_ = p.indexAdd(channelIndexKey(ch.Id), pk.ID)
 	for _, id := range ids {
 		_ = p.indexAdd(userPendingKey(id), pk.ID)
 	}
-	writeJSON(w, http.StatusCreated, pk)
+	return pk, nil
 }
 
 // fallbackMessage is what non-plugin clients (mobile without webapp, email, search) see; it @mentions respondents (G10).
@@ -217,6 +221,7 @@ func cardProps(pk *Pack) model.StringInterface {
 		"ssq_completed":       done,
 		"ssq_completed_ids":   pk.CompletedUserIDs,
 		"ssq_author_id":       pk.AuthorUserID,
+		"ssq_author":          pk.AuthorUsername,
 		"ssq_created_at":      pk.CreatedAt,
 		"ssq_updated_at":      model.GetMillis(),
 	}
@@ -267,6 +272,27 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "\n\n…(truncated; full log via summary.md)"
+}
+
+// closeMessage is the thread reply on complete/lock/expire. When a bot created the pack it is @mentioned so the
+// agent wakes up through its normal mention handling and continues from the answers (pull via GET /packs/{id}).
+func closeMessage(pk *Pack, headline, authorUsername string) string {
+	mention := ""
+	if pk.AuthorBot && authorUsername != "" {
+		mention = "@" + authorUsername + " "
+	}
+	return fmt.Sprintf("%s%s **%s**\nPack id: `%s` (answers via `GET /plugins/com.mysticspark.stakeholder-questions/api/v1/packs/%s`)\n\n%s",
+		mention, headline, pk.Title, pk.ID, pk.ID, truncate(summaryMarkdown(pk), 12000))
+}
+
+func (p *Plugin) postClose(pk *Pack, headline string) {
+	name := ""
+	if pk.AuthorBot && pk.AuthorUserID != p.botID {
+		if u, appErr := p.API.GetUser(pk.AuthorUserID); appErr == nil {
+			name = u.Username
+		}
+	}
+	p.postInThread(pk, closeMessage(pk, headline, name))
 }
 
 // postInThread replies under the pack card as the plugin bot.
@@ -393,7 +419,7 @@ func (p *Plugin) handleAnswer(w http.ResponseWriter, r *http.Request, userID, id
 	}
 	if res.PackCompleted {
 		p.clearPending(pk)
-		p.postInThread(pk, "✅ **Pack complete: "+pk.Title+"**\n\n"+truncate(summaryMarkdown(pk), 12000))
+		p.postClose(pk, "✅ Pack complete:")
 	}
 	v, _ := p.viewerFor(pk, userID, r)
 	writeJSON(w, http.StatusOK, visibleCopy(pk, v, p.config().AllowObserverResultsOnComplete))
@@ -422,7 +448,7 @@ func (p *Plugin) handleLock(w http.ResponseWriter, r *http.Request, userID, id s
 		}
 		p.clearPending(pk)
 		p.updateCard(pk)
-		p.postInThread(pk, "🔒 **Pack locked: "+pk.Title+"**\n\n"+truncate(summaryMarkdown(pk), 12000))
+		p.postClose(pk, "🔒 Pack locked:")
 	}
 	writeJSON(w, http.StatusOK, visibleCopy(pk, v, p.config().AllowObserverResultsOnComplete))
 }

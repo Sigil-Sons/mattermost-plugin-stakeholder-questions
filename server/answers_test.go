@@ -157,3 +157,15 @@ func TestDueActions(t *testing.T) {
 		t.Fatal("closed packs never expire")
 	}
 }
+
+func TestCloseMessageMentionsBotAuthorOnly(t *testing.T) {
+	pk := testPack()
+	pk.AuthorBot = true
+	if m := closeMessage(pk, "✅ Pack complete:", "sigil"); !strings.HasPrefix(m, "@sigil ✅ Pack complete: **T**") || !strings.Contains(m, "## Decisions") {
+		t.Fatalf("bot author should be mentioned first: %q", m[:60])
+	}
+	pk.AuthorBot = false
+	if m := closeMessage(pk, "✅ Pack complete:", "drew"); strings.HasPrefix(m, "@") {
+		t.Fatal("human authors are not pinged")
+	}
+}

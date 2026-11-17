@@ -31,7 +31,7 @@ func (p *Plugin) OnActivate() error {
 	}
 	p.botID = botID
 	if err := p.API.RegisterCommand(&model.Command{Trigger: "ssq", AutoComplete: true,
-		AutoCompleteDesc: "Stakeholder question packs", AutoCompleteHint: "pending"}); err != nil {
+		AutoCompleteDesc: "Stakeholder question packs", AutoCompleteHint: "new | pending"}); err != nil {
 		return err
 	}
 	p.stop = make(chan struct{})

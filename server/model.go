@@ -56,6 +56,7 @@ type Pack struct {
 	Summary              string                       `json:"summary,omitempty"`
 	AuthorUserID         string                       `json:"author_user_id"`
 	AuthorBot            bool                         `json:"author_bot"`
+	AuthorUsername       string                       `json:"author_username,omitempty"`
 	RespondentUserIDs    []string                     `json:"respondent_user_ids"`
 	MinRespondents       int                          `json:"min_respondents"`
 	Importance           string                       `json:"importance"`

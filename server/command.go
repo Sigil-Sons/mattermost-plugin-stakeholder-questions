@@ -18,8 +18,14 @@ func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*mo
 	reply := func(t string) (*model.CommandResponse, *model.AppError) {
 		return &model.CommandResponse{ResponseType: model.CommandResponseTypeEphemeral, Text: t}, nil
 	}
+	if sub == "new" {
+		if appErr := p.openCreateDialog(args.TriggerId, args.ChannelId); appErr != nil {
+			return reply("Could not open the form: " + appErr.Error())
+		}
+		return &model.CommandResponse{}, nil
+	}
 	if sub != "pending" {
-		return reply("`/ssq pending` lists question packs waiting on you. Packs are created by bots through the plugin API.")
+		return reply("`/ssq new` opens a form to post a question pack here. `/ssq pending` lists packs waiting on you. Bots can post packs through the plugin API (docs/AGENT.md).")
 	}
 	ids, err := p.getIndex(userPendingKey(args.UserId))
 	if err != nil {

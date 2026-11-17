@@ -4,7 +4,7 @@
   "description": "Multiplayer stakeholder question packs: compact channel card + answer wizard, bot API for builder agents.",
   "homepage_url": "https://github.com/Sigil-Sons/mattermost-plugin-stakeholder-questions",
   "support_url": "https://github.com/Sigil-Sons/mattermost-plugin-stakeholder-questions/issues",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "min_server_version": "10.0.0",
   "server": {
     "executables": {

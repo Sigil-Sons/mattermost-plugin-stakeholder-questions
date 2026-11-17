@@ -49,6 +49,11 @@ Rules:
 
 ## Read back
 
+When the pack completes, is locked or expires, the plugin replies in the card's thread with the decision log and
+**@mentions the bot that created it** (bots only; human authors are not pinged). Treat that mention as the wake-up,
+then pull the answers:
+
+
 `GET …/packs/{id}` as the author returns every answer:
 `answers[user_id][question_id] = {option_ids, other_text, image_file_ids, skipped}`.
 Poll until `status` is `complete` (quorum met), `locked` (author locked) or `expired`.
