@@ -1,0 +1,13 @@
+{
+  "name": "stakeholder-questions-webapp",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/index.tsx --bundle --minify --format=iife --target=es2020 --jsx=transform --alias:react=./src/shims/react.ts --outfile=dist/main.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.2",
+    "typescript": "5.6.3",
+    "@types/react": "19.0.10"
+  }
+}

@@ -1,8 +1,6 @@
-node_modules/
-dist/
 server/dist/
 webapp/dist/
+webapp/node_modules/
+dist/
 *.tar.gz
-.DS_Store
-.env
-*.exe
+.cache/

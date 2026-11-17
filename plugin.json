@@ -1,0 +1,52 @@
+{
+  "id": "com.mysticspark.stakeholder-questions",
+  "name": "Stakeholder Questions",
+  "description": "Multiplayer stakeholder question packs: compact channel card + answer wizard, bot API for builder agents.",
+  "homepage_url": "https://github.com/Sigil-Sons/mattermost-plugin-stakeholder-questions",
+  "support_url": "https://github.com/Sigil-Sons/mattermost-plugin-stakeholder-questions/issues",
+  "version": "0.1.0",
+  "min_server_version": "10.0.0",
+  "server": {
+    "executables": {
+      "linux-amd64": "server/dist/plugin-linux-amd64",
+      "linux-arm64": "server/dist/plugin-linux-arm64"
+    }
+  },
+  "webapp": {
+    "bundle_path": "webapp/dist/main.js"
+  },
+  "settings_schema": {
+    "header": "Question packs posted by bots or people; respondents answer in a wizard.",
+    "footer": "",
+    "settings": [
+      {
+        "key": "MaxQuestionsPerPack",
+        "display_name": "Max questions per pack",
+        "type": "number",
+        "default": 8,
+        "help_text": "Packs with more questions are rejected."
+      },
+      {
+        "key": "DefaultCloseDays",
+        "display_name": "Default close (days)",
+        "type": "number",
+        "default": 7,
+        "help_text": "0 = packs never auto-close."
+      },
+      {
+        "key": "AllowObserverResultsOnComplete",
+        "display_name": "Observers see results when complete",
+        "type": "bool",
+        "default": true,
+        "help_text": "Channel members who are not respondents can view results once the pack is complete."
+      },
+      {
+        "key": "AllowedTeamIds",
+        "display_name": "Allowed team IDs",
+        "type": "text",
+        "default": "",
+        "help_text": "Comma-separated team IDs where packs may be created. Empty = all teams (dev only)."
+      }
+    ]
+  }
+}
