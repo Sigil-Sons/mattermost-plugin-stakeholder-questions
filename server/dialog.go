@@ -37,7 +37,7 @@ func (p *Plugin) openCreateDialog(triggerID, channelID string) *model.AppError {
 					Options:  []*model.PostActionOptions{{Text: "Normal", Value: "normal"}, {Text: "High", Value: "high"}, {Text: "Low", Value: "low"}}},
 				{DisplayName: "Questions", Name: "questions", Type: "textarea", MaxLength: 3000, Placeholder: dialogExample,
 					HelpText: QuestionFormatHelp},
-				{DisplayName: "Summary (optional)", Name: "summary", Type: "text", Optional: true, MaxLength: 200},
+				{DisplayName: "Summary", Name: "summary", Type: "text", Optional: true, MaxLength: 200},
 			},
 		},
 	})
