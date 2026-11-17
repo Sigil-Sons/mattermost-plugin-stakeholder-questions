@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 )
 
@@ -16,6 +17,34 @@ type Plugin struct {
 
 	// kvLock serialises read-modify-write of packs and indexes (single-node MM).
 	kvLock sync.Mutex
+
+	botID string
+	stop  chan struct{}
+}
+
+// OnActivate registers /ssq, ensures the plugin bot (thread replies, reminders) and starts the sweeper.
+func (p *Plugin) OnActivate() error {
+	botID, err := p.API.EnsureBotUser(&model.Bot{Username: "stakeholder-questions", DisplayName: "Stakeholder Questions",
+		Description: "Posts pack results and reminders."})
+	if err != nil {
+		return err
+	}
+	p.botID = botID
+	if err := p.API.RegisterCommand(&model.Command{Trigger: "ssq", AutoComplete: true,
+		AutoCompleteDesc: "Stakeholder question packs", AutoCompleteHint: "pending"}); err != nil {
+		return err
+	}
+	p.stop = make(chan struct{})
+	go p.sweepLoop(p.stop)
+	return nil
+}
+
+func (p *Plugin) OnDeactivate() error {
+	if p.stop != nil {
+		close(p.stop)
+		p.stop = nil
+	}
+	return nil
 }
 
 type configuration struct {

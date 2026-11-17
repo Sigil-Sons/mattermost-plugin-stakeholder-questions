@@ -29,18 +29,22 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 		return
 	}
 	path := strings.TrimSuffix(r.URL.Path, "/")
+	parts := strings.Split(strings.TrimPrefix(path, "/api/v1/"), "/")
 	switch {
 	case path == "/api/v1/packs" && r.Method == http.MethodPost:
 		p.handleCreate(w, r, userID)
 	case path == "/api/v1/me/pending" && r.Method == http.MethodGet:
 		p.handlePending(w, r, userID)
-	case strings.HasPrefix(path, "/api/v1/packs/") && r.Method == http.MethodGet:
-		id := strings.TrimPrefix(path, "/api/v1/packs/")
-		if strings.Contains(id, "/") {
-			writeErr(w, http.StatusNotFound, "not found")
-			return
-		}
-		p.handleGet(w, r, userID, id)
+	case len(parts) == 2 && parts[0] == "packs" && r.Method == http.MethodGet:
+		p.handleGet(w, r, userID, parts[1])
+	case len(parts) == 3 && parts[0] == "packs" && parts[2] == "answers" && r.Method == http.MethodPost:
+		p.handleAnswer(w, r, userID, parts[1])
+	case len(parts) == 3 && parts[0] == "packs" && parts[2] == "lock" && r.Method == http.MethodPost:
+		p.handleLock(w, r, userID, parts[1])
+	case len(parts) == 3 && parts[0] == "packs" && parts[2] == "summary.md" && r.Method == http.MethodGet:
+		p.handleSummary(w, r, userID, parts[1])
+	case len(parts) == 4 && parts[0] == "packs" && parts[2] == "files" && r.Method == http.MethodGet:
+		p.handleFile(w, r, userID, parts[1], parts[3])
 	default:
 		writeErr(w, http.StatusNotFound, "not found")
 	}
@@ -113,6 +117,18 @@ func (p *Plugin) handleCreate(w http.ResponseWriter, r *http.Request, userID str
 		ids = append(ids, u.Id)
 		names = append(names, u.Username)
 	}
+	for _, q := range req.Questions {
+		fids := append([]string{}, q.HelpFileIDs...)
+		for _, o := range q.Options {
+			if o.ImageFileID != nil && *o.ImageFileID != "" {
+				fids = append(fids, *o.ImageFileID)
+			}
+		}
+		if err := p.checkOwnFiles(fids, userID); err != nil {
+			writeErr(w, http.StatusBadRequest, "question "+q.ID+": "+err.Error())
+			return
+		}
+	}
 	imp := strings.ToLower(strings.TrimSpace(req.Importance))
 	if imp == "" {
 		imp = "normal"
@@ -141,6 +157,7 @@ func (p *Plugin) handleCreate(w http.ResponseWriter, r *http.Request, userID str
 		AllowSkip: req.AllowSkip, AllowReviseUntilLock: true,
 		Status: StatusOpen, CreatedAt: now, ClosesAt: closes,
 		Questions: req.Questions, Answers: map[string]map[string]Answer{}, CompletedUserIDs: []string{},
+		RespondentUsernames: names,
 	}
 
 	p.kvLock.Lock()
@@ -153,7 +170,7 @@ func (p *Plugin) handleCreate(w http.ResponseWriter, r *http.Request, userID str
 		UserId: userID, ChannelId: ch.Id, Type: PostType,
 		Message: fallbackMessage(pk, names),
 	}
-	post.SetProps(cardProps(pk, names, nil))
+	post.SetProps(cardProps(pk))
 	created, appErr := p.API.CreatePost(post)
 	if appErr != nil {
 		_ = p.API.KVDelete(packKey(pk.ID))
@@ -183,9 +200,10 @@ func fallbackMessage(pk *Pack, names []string) string {
 }
 
 // cardProps carries everything the channel card needs to render without an extra fetch.
-func cardProps(pk *Pack, names []string, completedNames []string) model.StringInterface {
-	if completedNames == nil {
-		completedNames = []string{}
+func cardProps(pk *Pack) model.StringInterface {
+	done := []string{}
+	for _, u := range pk.CompletedUserIDs {
+		done = append(done, pk.username(u))
 	}
 	return model.StringInterface{
 		"ssq_pack_id":         pk.ID,
@@ -194,9 +212,70 @@ func cardProps(pk *Pack, names []string, completedNames []string) model.StringIn
 		"ssq_status":          pk.Status,
 		"ssq_question_count":  len(pk.Questions),
 		"ssq_min_respondents": pk.MinRespondents,
-		"ssq_respondents":     names,
-		"ssq_completed":       completedNames,
+		"ssq_respondents":     pk.RespondentUsernames,
+		"ssq_respondent_ids":  pk.RespondentUserIDs,
+		"ssq_completed":       done,
+		"ssq_completed_ids":   pk.CompletedUserIDs,
+		"ssq_author_id":       pk.AuthorUserID,
 		"ssq_created_at":      pk.CreatedAt,
+		"ssq_updated_at":      model.GetMillis(),
+	}
+}
+
+func (p *Plugin) checkOwnFiles(ids []string, userID string) error {
+	for _, id := range ids {
+		info, appErr := p.API.GetFileInfo(id)
+		if appErr != nil || info == nil {
+			return fmt.Errorf("file %s not found", id)
+		}
+		if info.CreatorId != userID {
+			return fmt.Errorf("file %s was not uploaded by you", id)
+		}
+		if !strings.HasPrefix(info.MimeType, "image/") {
+			return fmt.Errorf("file %s is not an image", id)
+		}
+	}
+	return nil
+}
+
+// updateCard re-renders the channel card from pack state. Caller holds kvLock.
+func (p *Plugin) updateCard(pk *Pack) {
+	post, appErr := p.API.GetPost(pk.PostID)
+	if appErr != nil || post == nil {
+		return
+	}
+	for k, v := range cardProps(pk) {
+		post.AddProp(k, v)
+	}
+	if _, appErr := p.API.UpdatePost(post); appErr != nil {
+		p.API.LogWarn("ssq: card update failed", "pack", pk.ID, "err", appErr.Error())
+	}
+}
+
+func (p *Plugin) clearPending(pk *Pack, only ...string) {
+	users := pk.RespondentUserIDs
+	if len(only) > 0 {
+		users = only
+	}
+	for _, u := range users {
+		_ = p.indexRemove(userPendingKey(u), pk.ID)
+	}
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "\n\n…(truncated; full log via summary.md)"
+}
+
+// postInThread replies under the pack card as the plugin bot.
+func (p *Plugin) postInThread(pk *Pack, msg string) {
+	if p.botID == "" {
+		return
+	}
+	if _, appErr := p.API.CreatePost(&model.Post{UserId: p.botID, ChannelId: pk.ChannelID, RootId: pk.PostID, Message: msg}); appErr != nil {
+		p.API.LogWarn("ssq: thread reply failed", "pack", pk.ID, "err", appErr.Error())
 	}
 }
 
@@ -257,4 +336,161 @@ func (p *Plugin) handlePending(w http.ResponseWriter, _ *http.Request, userID st
 			Questions: len(pk.Questions), Answered: len(pk.Answers[userID])})
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (p *Plugin) handleAnswer(w http.ResponseWriter, r *http.Request, userID, id string) {
+	var req AnswerRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	p.kvLock.Lock()
+	defer p.kvLock.Unlock()
+	pk, err := p.getPack(id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "load failed")
+		return
+	}
+	if pk == nil {
+		writeErr(w, http.StatusNotFound, "pack not found")
+		return
+	}
+	if !contains(pk.RespondentUserIDs, userID) {
+		writeErr(w, http.StatusForbidden, errNotRespondent.Error())
+		return
+	}
+	now := model.GetMillis()
+	ans, err := buildAnswer(pk, req, now)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := p.checkOwnFiles(ans.ImageFileIDs, userID); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	res, err := applyAnswer(pk, userID, req.QuestionID, ans, now)
+	switch {
+	case err == errLocked:
+		writeErr(w, http.StatusConflict, err.Error())
+		return
+	case err == errNotRespondent:
+		writeErr(w, http.StatusForbidden, err.Error())
+		return
+	case err != nil:
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := p.savePack(pk); err != nil {
+		writeErr(w, http.StatusInternalServerError, "store failed")
+		return
+	}
+	if res.UserCompleted {
+		p.clearPending(pk, userID)
+	}
+	if res.UserCompleted || res.PackCompleted {
+		p.updateCard(pk)
+	}
+	if res.PackCompleted {
+		p.clearPending(pk)
+		p.postInThread(pk, "✅ **Pack complete: "+pk.Title+"**\n\n"+truncate(summaryMarkdown(pk), 12000))
+	}
+	v, _ := p.viewerFor(pk, userID, r)
+	writeJSON(w, http.StatusOK, visibleCopy(pk, v, p.config().AllowObserverResultsOnComplete))
+}
+
+func (p *Plugin) handleLock(w http.ResponseWriter, r *http.Request, userID, id string) {
+	p.kvLock.Lock()
+	defer p.kvLock.Unlock()
+	pk, err := p.getPack(id)
+	if err != nil || pk == nil {
+		writeErr(w, http.StatusNotFound, "pack not found")
+		return
+	}
+	v, _ := p.viewerFor(pk, userID, r)
+	if !v.IsAuthor && !v.IsAdmin {
+		writeErr(w, http.StatusForbidden, "only the author or an admin can lock a pack")
+		return
+	}
+	if pk.Status == StatusOpen {
+		now := model.GetMillis()
+		pk.Status = StatusLocked
+		pk.LockedAt = &now
+		if err := p.savePack(pk); err != nil {
+			writeErr(w, http.StatusInternalServerError, "store failed")
+			return
+		}
+		p.clearPending(pk)
+		p.updateCard(pk)
+		p.postInThread(pk, "🔒 **Pack locked: "+pk.Title+"**\n\n"+truncate(summaryMarkdown(pk), 12000))
+	}
+	writeJSON(w, http.StatusOK, visibleCopy(pk, v, p.config().AllowObserverResultsOnComplete))
+}
+
+func (p *Plugin) handleSummary(w http.ResponseWriter, r *http.Request, userID, id string) {
+	pk, err := p.getPack(id)
+	if err != nil || pk == nil {
+		writeErr(w, http.StatusNotFound, "pack not found")
+		return
+	}
+	v, ok := p.viewerFor(pk, userID, r)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "pack not found")
+		return
+	}
+	v.ShowOthers = true // asking for the decision log is an explicit opt-in
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Disposition", `inline; filename="summary.md"`)
+	_, _ = w.Write([]byte(summaryMarkdown(visibleCopy(pk, v, p.config().AllowObserverResultsOnComplete))))
+}
+
+// handleFile serves images referenced by the pack, filtered by the same visibility rules as answers.
+func (p *Plugin) handleFile(w http.ResponseWriter, r *http.Request, userID, id, fileID string) {
+	pk, err := p.getPack(id)
+	if err != nil || pk == nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	v, ok := p.viewerFor(pk, userID, r)
+	if !ok {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	vis := visibleCopy(pk, v, p.config().AllowObserverResultsOnComplete)
+	allowed := false
+	for _, q := range vis.Questions {
+		if contains(q.HelpFileIDs, fileID) {
+			allowed = true
+		}
+		for _, o := range q.Options {
+			if o.ImageFileID != nil && *o.ImageFileID == fileID {
+				allowed = true
+			}
+		}
+	}
+	for _, byQ := range vis.Answers {
+		for _, a := range byQ {
+			if contains(a.ImageFileIDs, fileID) {
+				allowed = true
+			}
+		}
+	}
+	if !allowed {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	info, appErr := p.API.GetFileInfo(fileID)
+	if appErr != nil || !strings.HasPrefix(info.MimeType, "image/") {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	data, appErr := p.API.GetFile(fileID)
+	if appErr != nil {
+		writeErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	w.Header().Set("Content-Type", info.MimeType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	_, _ = w.Write(data)
 }

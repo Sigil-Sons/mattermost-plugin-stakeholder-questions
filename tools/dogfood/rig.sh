@@ -45,6 +45,10 @@ PY
 mv bot.tok.new bot.tok; fi
 m team users add ssq sigil >/dev/null 2>&1 || true
 m channel users add ssq:office-hours drew scott sigil >/dev/null 2>&1 || true
+# A8: seed another plugin's settings, install, and prove they survive (Jitsi wipe incident)
+printf '{"PluginSettings":{"Plugins":{"jitsi":{"jitsiurl":"https://meet.example.test","jitsinamingscheme":"mattermost"}}}}' > a8.json
+docker cp a8.json ssq-mm:/tmp/a8.json; m config patch /tmp/a8.json >/dev/null
+BEFORE=$(m config get PluginSettings.Plugins.jitsi 2>/dev/null | tr -d ' \n')
 docker cp "$TGZ" ssq-mm:/tmp/ssq.tar.gz
 m plugin add /tmp/ssq.tar.gz --force 2>&1 | tail -1
 m plugin enable com.mysticspark.stakeholder-questions 2>&1 | tail -1
@@ -53,3 +57,5 @@ WANT=$(tar -xzOf "$TGZ" com.mysticspark.stakeholder-questions/webapp/dist/main.j
 HAVE=$(docker exec ssq-mm md5sum /mm/mattermost/plugins/com.mysticspark.stakeholder-questions/webapp/dist/main.js | cut -d' ' -f1)
 echo "installed $(basename "$TGZ") bundle_match=$([ "$WANT" = "$HAVE" ] && echo yes || echo NO)"
 [ "$WANT" = "$HAVE" ]
+AFTER=$(m config get PluginSettings.Plugins.jitsi 2>/dev/null | tr -d ' \n')
+echo "A8 other plugin config preserved=$([ -n "$BEFORE" ] && [ "$BEFORE" = "$AFTER" ] && echo yes || echo NO) ($AFTER)"

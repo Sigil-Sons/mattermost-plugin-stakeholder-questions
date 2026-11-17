@@ -44,6 +44,7 @@ type Answer struct {
 	OtherText    *string  `json:"other_text"`
 	ImageFileIDs []string `json:"image_file_ids"`
 	UpdatedAt    int64    `json:"updated_at"`
+	Skipped      bool     `json:"skipped,omitempty"`
 }
 
 type Pack struct {
@@ -68,6 +69,8 @@ type Pack struct {
 	Questions            []Question                   `json:"questions"`
 	Answers              map[string]map[string]Answer `json:"answers"`
 	CompletedUserIDs     []string                     `json:"completed_user_ids"`
+	RespondentUsernames  []string                     `json:"respondent_usernames"`
+	NudgedUserIDs        []string                     `json:"nudged_user_ids,omitempty"`
 }
 
 // CreateRequest is the bot/agent create body (SPEC §6, §10).

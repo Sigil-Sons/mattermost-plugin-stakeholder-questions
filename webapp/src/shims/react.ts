@@ -7,3 +7,5 @@ export const useState: any = R.useState;
 export const useEffect: any = R.useEffect;
 export const useCallback: any = R.useCallback;
 export const useMemo: any = R.useMemo;
+export const useRef: any = R.useRef;
+export const Fragment: any = R.Fragment;
