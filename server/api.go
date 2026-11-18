@@ -24,6 +24,9 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 // Auth: Mattermost sets Mattermost-User-ID for session users and bot/personal access tokens.
 func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("Mattermost-User-ID")
+	if p.serveMobile(w, r, userID) {
+		return
+	}
 	if userID == "" {
 		writeErr(w, http.StatusUnauthorized, "not authenticated")
 		return
@@ -175,7 +178,7 @@ func (p *Plugin) createPack(userID string, req CreateRequest) (*Pack, *createErr
 	if err := p.savePack(pk); err != nil {
 		return nil, cerr(http.StatusInternalServerError, "store failed")
 	}
-	post := &model.Post{UserId: userID, ChannelId: ch.Id, Type: PostType, Message: fallbackMessage(pk, names)}
+	post := &model.Post{UserId: userID, ChannelId: ch.Id, Type: PostType, Message: fallbackMessage(pk, names, p.answerLink(pk.ID))}
 	post.SetProps(cardProps(pk))
 	created, appErr := p.API.CreatePost(post)
 	if appErr != nil {
@@ -191,16 +194,6 @@ func (p *Plugin) createPack(userID string, req CreateRequest) (*Pack, *createErr
 		_ = p.indexAdd(userPendingKey(id), pk.ID)
 	}
 	return pk, nil
-}
-
-// fallbackMessage is what non-plugin clients (mobile without webapp, email, search) see; it @mentions respondents (G10).
-func fallbackMessage(pk *Pack, names []string) string {
-	at := make([]string, len(names))
-	for i, n := range names {
-		at[i] = "@" + n
-	}
-	return fmt.Sprintf("📋 **Stakeholder pack · %s** — %s, %d question(s) waiting on you.",
-		pk.Title, strings.Join(at, " "), len(pk.Questions))
 }
 
 // cardProps carries everything the channel card needs to render without an extra fetch.
@@ -252,6 +245,7 @@ func (p *Plugin) updateCard(pk *Pack) {
 	for k, v := range cardProps(pk) {
 		post.AddProp(k, v)
 	}
+	post.Message = fallbackMessage(pk, pk.RespondentUsernames, p.answerLink(pk.ID))
 	if _, appErr := p.API.UpdatePost(post); appErr != nil {
 		p.API.LogWarn("ssq: card update failed", "pack", pk.ID, "err", appErr.Error())
 	}

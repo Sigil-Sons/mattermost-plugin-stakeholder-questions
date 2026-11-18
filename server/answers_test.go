@@ -169,3 +169,15 @@ func TestCloseMessageMentionsBotAuthorOnly(t *testing.T) {
 		t.Fatal("human authors are not pinged")
 	}
 }
+
+func TestFallbackMessageListsQuestionsAndLink(t *testing.T) {
+	pk := testPack()
+	pk.Questions[0].Options[0].Recommended = true
+	m := fallbackMessage(pk, []string{"drew", "scott"}, "https://mm.test/plugins/x/answer/p")
+	for _, want := range []string{"@drew @scott, 2 question(s)", "1. Where? _(pick one)_: Hermes LXC (recommended) · Blade · Other",
+		"2. Audio? _(pick any)_: TTS · Music · SFX", "📱 [Answer in browser](https://mm.test/plugins/x/answer/p)"} {
+		if !strings.Contains(m, want) {
+			t.Errorf("missing %q in\n%s", want, m)
+		}
+	}
+}

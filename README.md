@@ -6,7 +6,7 @@ Built for [Sigil & Sons](https://github.com/Sigil-Sons) · reusable on any Matte
 
 ## Status
 
-**v0.9.0: feature-complete MVP** (SS-53, SPEC §11 A1–A9 proven on a throwaway MM 12.0.2). Awaiting KITT review,
+**v0.11.0** (SS-53, SPEC §11 A1–A9 proven on a throwaway MM 12.0.2). Awaiting KITT review,
 then Drew + Scott dogfood on the house server.
 
 - Bot API creates packs and posts a compact channel card that @mentions respondents and updates live as people finish
@@ -16,6 +16,9 @@ then Drew + Scott dogfood on the house server.
 - Quorum completes and locks the pack and posts the summary in the thread; authors/admins can lock early; auto-expiry; one 24h reminder DM
 - Results view: per-question histogram with names, plus Copy/Open `summary.md`
 - `/ssq pending`
+- Mattermost mobile app: the post text lists the questions and links to **📱 Answer in browser**, a lightweight
+  answer page the plugin serves itself (`/plugins/com.mysticspark.stakeholder-questions/answer/<pack id>`, uses the normal
+  Mattermost login). The native app can't run plugin web code, so this is the phone path.
 - React 19 safe: only `registerPostTypeComponent` / `registerRootComponent`, no `ReactDOM.render`, no bundled React
 
 Agent payloads and read-back: [`docs/AGENT.md`](docs/AGENT.md).
